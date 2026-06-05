@@ -1,81 +1,54 @@
 export default {
   async fetch(request, env, ctx) {
-    // Hanya proses request POST dari SeaTalk
     if (request.method !== "POST") {
-      return new Response("Bot SeaTalk Aktif di Cloudflare. Menunggu event...", { status: 200 });
+      return new Response("Bot SeaTalk Aktif.", { status: 200 });
     }
 
     try {
-      // Ambil data JSON yang dikirim oleh SeaTalk
       const payload = await request.clone().json();
+      console.log("Event diterima:", JSON.stringify(payload));
 
-      // ==============================================================
-      // 1. TAHAP VERIFIKASI SEATALK (Wajib ada agar lolos pengecekan)
-      // ==============================================================
+      // 1. TAHAP VERIFIKASI
       if (payload.event_type === "event_verification") {
-        return new Response(JSON.stringify({
-          "seatalk_challenge": payload.event.seatalk_challenge
-        }), {
+        return new Response(JSON.stringify({ "seatalk_challenge": payload.event.seatalk_challenge }), {
           status: 200,
           headers: { "Content-Type": "application/json" }
         });
       }
 
-      // ==============================================================
-      // 2. TAHAP EVENT BOT (Contoh: Menangani Pesan Masuk)
-      // ==============================================================
-      // PELANGGARAN 1 DIPERBAIKI: Stringify payload agar data bisa dibaca
-      console.log("Event mentah:", JSON.stringify(payload));
-
-      // Pastikan event yang masuk adalah pesan dari pengguna
+      // 2. TAHAP PENANGANAN PESAN
+      // Kita masukkan semua kemungkinan event_type agar bot tidak "buta"
       const eventType = payload.event_type;
-      console.log("Tipe event yang terdeteksi:", eventType);
-
-      // Menangkap beberapa kemungkinan nama event dari SeaTalk
-      if (eventType === "message_from_bot" || eventType === "message" || eventType === "message_from_user") {
-        
-        // Ambil teks pesan dan kode karyawan (employee_code) pengirim
-        const incomingText = payload.event.message?.text?.content?.trim().toLowerCase() || "";
-        const employeeCode = payload.event.sender?.employee_code;
-
-        console.log("Teks diketik:", incomingText, "| Pengirim:", employeeCode);
-
-        // Jika pesan adalah "halo" dan kita tahu siapa pengirimnya, panggil fungsi balasan
-        if (incomingText === "halo" && employeeCode) {
-          console.log("Kondisi terpenuhi! Menjalankan balasan...");
-          // ctx.waitUntil() memastikan proses balasan berjalan di background
-          ctx.waitUntil(replyToUser(employeeCode, "Halo juga!"));
-        } else {
-          console.log("Pesan diabaikan: Bukan 'halo' atau pengirim tidak valid.");
-        }
-      }
       
-      // PELANGGARAN 2 DIPERBAIKI: Tambahkan "code: 0" yang disukai API bot
-      return new Response(JSON.stringify({"code": 0, "status": "success"}), {
+      // Ambil teks dan employee_code berdasarkan struktur log Anda yang terbaru
+      const incomingText = payload.event?.message?.text?.content?.trim().toLowerCase() || "";
+      const employeeCode = payload.event?.employee_code;
+
+      console.log("Mengecek pesan:", incomingText, "dari:", employeeCode);
+
+      if (incomingText === "halo" && employeeCode) {
+        console.log("Kondisi terpenuhi, mengirim balasan...");
+        ctx.waitUntil(replyToUser(employeeCode, "Halo juga!"));
+      }
+
+      return new Response(JSON.stringify({ "code": 0, "status": "success" }), {
         status: 200,
         headers: { "Content-Type": "application/json" }
       });
 
     } catch (error) {
-      // Jika terjadi error (misalnya request bukan JSON valid)
-      return new Response(JSON.stringify({"error": error.message}), { 
-        status: 500,
-        headers: { "Content-Type": "application/json" }
-      });
+      console.error("Error utama:", error);
+      return new Response(JSON.stringify({ "error": error.message }), { status: 500 });
     }
   }
 };
 
-// ====================================================================
-// FUNGSI UNTUK MEMBALAS PESAN KE SEATALK
-// ====================================================================
 async function replyToUser(employeeCode, messageText) {
-  // ⚠️ GANTI DENGAN APP ID DAN APP SECRET BOT ANDA DARI DASHBOARD SEATALK
   const APP_ID = "NzE2Mjg3ODUxMjc5";
   const APP_SECRET = "c3urIS7asdvFi0rIwbhuAKBklGWY1yQv";
 
   try {
-    // 1. Dapatkan Access Token (Wajib dipanggil sebelum kirim pesan)
+    // 1. Get Token
     const tokenRes = await fetch("https://openapi.seatalk.io/auth/app_access_token", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
@@ -85,12 +58,9 @@ async function replyToUser(employeeCode, messageText) {
     const tokenData = await tokenRes.json();
     const accessToken = tokenData.app_access_token;
 
-    if (!accessToken) {
-      console.error("Gagal mendapatkan Access Token:", tokenData);
-      return;
-    }
+    if (!accessToken) throw new Error("Gagal ambil token: " + JSON.stringify(tokenData));
 
-    // 2. Kirim Balasan Pesan ke Pengguna
+    // 2. Send Message
     const sendRes = await fetch("https://openapi.seatalk.io/messaging/v2/single_chat", {
       method: "POST",
       headers: {
@@ -101,16 +71,14 @@ async function replyToUser(employeeCode, messageText) {
         employee_code: employeeCode,
         message: {
           tag: "text",
-          text: {
-            content: messageText
-          }
+          text: { content: messageText }
         }
       })
     });
 
     const sendData = await sendRes.json();
-    console.log("Status kirim pesan:", sendData);
+    console.log("Hasil kirim pesan:", JSON.stringify(sendData));
   } catch (err) {
-    console.error("Error saat membalas pesan:", err);
+    console.error("Error fungsi replyToUser:", err);
   }
 }
