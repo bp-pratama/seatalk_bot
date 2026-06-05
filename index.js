@@ -38,14 +38,14 @@ export default {
 
 async function handleAiReply(env, employeeCode, text) {
   try {
-    // 1. Dapatkan Respon AI
     const aiResponse = await env.AI.run('@cf/nvidia/nemotron-3-120b-a12b', {
       prompt: text
     });
     
-    const message = aiResponse.response || "Maaf, saya tidak mengerti.";
+    // TAMBAHKAN INI UNTUK DEBUG
+    console.log("Raw AI Response:", JSON.stringify(aiResponse)); 
 
-    // 2. Kirim ke SeaTalk
+    const message = aiResponse.response || (typeof aiResponse === 'string' ? aiResponse : "Maaf, saya tidak mengerti.");
     await replyToUser(message, employeeCode);
   } catch (err) {
     console.error("AI/Reply Error:", err);
