@@ -47,18 +47,6 @@ async function replyToUser(employeeCode, messageText) {
   const APP_ID = "NzE2Mjg3ODUxMjc5";
   const APP_SECRET = "c3urIS7asdvFi0rIwbhuAKBklGWY1yQv";
 
-<<<<<<< HEAD
-  try {
-    // 1. Panggil AI untuk mendapatkan jawaban
-    const aiResponse = await env.AI.run('@cf/nvidia/nemotron-3-120b-a12b', {
-      messages: [
-        { role: 'system', content: 'Anda adalah asisten bot kantor yang ramah dan membantu.' },
-        { role: 'user', content: userPrompt }
-      ]
-    });
-    
-    const botAnswer = aiResponse.response || "Maaf, saya tidak bisa memproses jawaban saat ini.";
-=======
   // Ambil token dulu
   const tokenRes = await fetch("https://openapi.seatalk.io/auth/app_access_token", {
     method: "POST",
@@ -67,7 +55,6 @@ async function replyToUser(employeeCode, messageText) {
   });
   const tokenData = await tokenRes.json();
   const accessToken = tokenData.app_access_token;
->>>>>>> a1c167c06ab1749b1174fda0854f6308a33f3bf3
 
   // Kirim pesan
   await fetch("https://openapi.seatalk.io/messaging/v2/single_chat", {
