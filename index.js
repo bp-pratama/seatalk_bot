@@ -24,26 +24,34 @@ export default {
       // ==============================================================
       // 2. TAHAP EVENT BOT (Contoh: Menangani Pesan Masuk)
       // ==============================================================
-      // Anda bisa memantau struktur payload ini di Cloudflare Dashboard (Logs)
-      console.log("Event diterima dari SeaTalk:", payload);
+      // PELANGGARAN 1 DIPERBAIKI: Stringify payload agar data bisa dibaca
+      console.log("Event mentah:", JSON.stringify(payload));
 
       // Pastikan event yang masuk adalah pesan dari pengguna
       const eventType = payload.event_type;
-      if (eventType === "message_from_bot" || eventType === "message" || eventType === "message_received_from_user") {
+      console.log("Tipe event yang terdeteksi:", eventType);
+
+      // Menangkap beberapa kemungkinan nama event dari SeaTalk
+      if (eventType === "message_from_bot" || eventType === "message" || eventType === "message_from_user") {
         
         // Ambil teks pesan dan kode karyawan (employee_code) pengirim
         const incomingText = payload.event.message?.text?.content?.trim().toLowerCase() || "";
         const employeeCode = payload.event.sender?.employee_code;
 
+        console.log("Teks diketik:", incomingText, "| Pengirim:", employeeCode);
+
         // Jika pesan adalah "halo" dan kita tahu siapa pengirimnya, panggil fungsi balasan
         if (incomingText === "halo" && employeeCode) {
+          console.log("Kondisi terpenuhi! Menjalankan balasan...");
           // ctx.waitUntil() memastikan proses balasan berjalan di background
           ctx.waitUntil(replyToUser(employeeCode, "Halo juga!"));
+        } else {
+          console.log("Pesan diabaikan: Bukan 'halo' atau pengirim tidak valid.");
         }
       }
       
-      // Beri respons sukses agar SeaTalk tahu kita menerima event-nya
-      return new Response(JSON.stringify({"status": "success"}), {
+      // PELANGGARAN 2 DIPERBAIKI: Tambahkan "code: 0" yang disukai API bot
+      return new Response(JSON.stringify({"code": 0, "status": "success"}), {
         status: 200,
         headers: { "Content-Type": "application/json" }
       });
