@@ -1,69 +1,96 @@
 export default {
   async fetch(request, env, ctx) {
-    if (request.method !== "POST") {
-      return new Response("Bot SeaTalk Aktif (Mode AI).", { status: 200 });
-    }
+    if (request.method !== "POST") return new Response("Bot Active", { status: 200 });
 
     try {
       const payload = await request.json();
-      
-      // 1. Verifikasi Event
+      console.log("DEBUG: RAW PAYLOAD RECEIVED:", JSON.stringify(payload));
+
+      const event = payload.event || {};
+
       if (payload.event_type === "event_verification") {
-        return new Response(JSON.stringify({ "seatalk_challenge": payload.event.seatalk_challenge }), {
+        return new Response(JSON.stringify({ "seatalk_challenge": event.seatalk_challenge }), {
           status: 200,
           headers: { "Content-Type": "application/json" }
         });
       }
 
-      // 2. Ekstraksi Data
-      const incomingText = payload.event?.message?.text?.content?.trim();
-      const employeeCode = payload.event?.employee_code;
+      const message = event.message || {};
+      let incomingText = "";
+      
+      if (typeof message.text === "string") {
+        incomingText = message.text;
+      } else if (typeof message.text === "object" && message.text !== null) {
+        incomingText = message.text.plain_text || message.text.content || "";
+      } else if (typeof message.content === "string") {
+        incomingText = message.content;
+      }
+      
+      incomingText = incomingText.trim();
 
-      if (incomingText && employeeCode) {
-        // Jalankan tugas di latar belakang agar respon ke SeaTalk cepat
-        ctx.waitUntil(handleAiReply(env, employeeCode, incomingText));
+      const groupId = event.group_id;
+      const employeeCode = event.employee_code || event.message?.sender?.employee_code || event.sender_id;
+      
+      const isGroup = !!groupId;
+      const targetId = groupId || employeeCode;
+      
+      const threadId = message.thread_id || ""; 
+      const originalMessageId = message.message_id;
+
+      if (!incomingText || !targetId) {
+        return new Response("OK", { status: 200 });
       }
 
-      return new Response(JSON.stringify({ "code": 0, "status": "success" }), {
-        status: 200,
-        headers: { "Content-Type": "application/json" }
-      });
+      console.log(`DEBUG: Memproses ${isGroup ? "GRUP" : "JAPRI"} - Target ID: ${targetId} | Thread ID: ${threadId} | Pesan: ${incomingText}`);
 
+      await handleAiReply(env, targetId, incomingText, isGroup, threadId, originalMessageId);
+
+      return new Response(JSON.stringify({ "code": 0 }), { status: 200 });
     } catch (error) {
-      console.error("Worker Error:", error);
-      return new Response(JSON.stringify({ "error": error.message }), { status: 500 });
+      console.log("DEBUG: Fatal Error di fetch:", error.message);
+      return new Response("OK", { status: 200 });
     }
   }
 };
 
-async function handleAiReply(env, employeeCode, text) {
+async function handleAiReply(env, targetId, text, isGroup, threadId, originalMessageId) {
   try {
-    const aiResponse = await env.AI.run('@cf/meta/llama-4-scout-17b-16e-instruct', {
-     messages: [
-    { role: "system", content: "Kamu adalah asisten yang membantu dan sopan." },
-    { role: "user", content: incomingText }
-      ]
-    });
-    
-    // TAMBAHKAN INI UNTUK DEBUG
-    console.log("Raw AI Response:", JSON.stringify(aiResponse)); 
+    const kvKey = `history_${targetId}`;
+    let history = [];
 
-    const message = aiResponse.response || (typeof aiResponse === 'string' ? aiResponse : "Maaf, saya tidak mengerti.");
-    await replyToUser(message, employeeCode);
+    try {
+      const rawHistory = await env.BOT_MEMORY.get(kvKey);
+      if (rawHistory) {
+         history = JSON.parse(rawHistory);
+         if (!Array.isArray(history)) history = [];
+      }
+    } catch (e) {
+      console.log("DEBUG: History format invalid, mereset memori.");
+      history = [];
+    }
+
+    history.push({ role: "user", content: text });
+    if (history.length > 6) history = history.slice(-6);
+
+    const aiResponse = await env.AI.run('@cf/meta/llama-3.1-8b-instruct', {
+      messages: [{ role: "system", content: "Kamu asisten yang ramah." }, ...history],
+    });
+
+    const reply = aiResponse.response || "Maaf, saya tidak mengerti.";
+    
+    history.push({ role: "assistant", content: reply });
+    await env.BOT_MEMORY.put(kvKey, JSON.stringify(history), { expirationTtl: 3600 });
+    
+    await replyToUser(reply, targetId, isGroup, threadId, originalMessageId);
   } catch (err) {
-    console.error("AI/Reply Error:", err);
+    console.log("DEBUG: Error di AI:", err.message);
   }
 }
 
-console.log("AI Output structure:", JSON.stringify(aiResponse)); 
-// Lihat di log terminal/dashboard, apakah properti yang benar adalah .response, .result, atau .message?
-
-async function replyToUser(messageText, employeeCode) {
-  // Gunakan env variable untuk keamanan, jangan di-hardcode di script!
+async function replyToUser(messageText, targetId, isGroup, threadId, originalMessageId) {
   const APP_ID = "NzE2Mjg3ODUxMjc5"; 
   const APP_SECRET = "c3urIS7asdvFi0rIwbhuAKBklGWY1yQv";
 
-  // Ambil Access Token
   const tokenRes = await fetch("https://openapi.seatalk.io/auth/app_access_token", {
     method: "POST",
     headers: { "Content-Type": "application/json" },
@@ -71,23 +98,40 @@ async function replyToUser(messageText, employeeCode) {
   });
   
   const tokenData = await tokenRes.json();
-  if (!tokenData.app_access_token) throw new Error("Gagal mengambil token");
+  if (!tokenData.app_access_token) return;
 
-  // Kirim Pesan
-  const response = await fetch("https://openapi.seatalk.io/messaging/v2/single_chat", {
+  const endpoint = isGroup 
+    ? "https://openapi.seatalk.io/messaging/v2/group_chat" 
+    : "https://openapi.seatalk.io/messaging/v2/single_chat";
+
+  let body;
+  if (isGroup) {
+      body = { 
+          group_id: targetId, // <---- PERBAIKAN: Menggunakan group_id
+          message: { tag: "text", text: { content: messageText } } 
+      };
+      
+      if (threadId && threadId !== "") {
+          body.thread_id = threadId;
+      } else if (originalMessageId) {
+          body.thread_id = originalMessageId; 
+      }
+  } else {
+      body = { 
+          employee_code: targetId, 
+          message: { tag: "text", text: { content: messageText } } 
+      };
+  }
+
+  const resp = await fetch(endpoint, {
     method: "POST",
-    headers: {
-      "Content-Type": "application/json",
-      "Authorization": `Bearer ${tokenData.app_access_token}`
+    headers: { 
+      "Content-Type": "application/json", 
+      "Authorization": `Bearer ${tokenData.app_access_token}` 
     },
-    body: JSON.stringify({
-      employee_code: employeeCode,
-      message: { tag: "text", text: { content: messageText } }
-    })
+    body: JSON.stringify(body)
   });
 
-  if (!response.ok) {
-    const errorDetails = await response.text();
-    throw new Error(`SeaTalk API Error: ${errorDetails}`);
-  }
+  const resData = await resp.json();
+  console.log(`DEBUG: Status Kirim ${isGroup ? "Grup" : "Japri"} (${resp.status}):`, JSON.stringify(resData));
 }

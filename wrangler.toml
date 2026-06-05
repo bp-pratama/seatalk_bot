@@ -1,6 +1,6 @@
 name = "seatalk-bot"
 main = "index.js"
-compatibility_date = "2024-05-01"
+compatibility_date = "2026-06-05"
 
 [observability]
 enabled = true
@@ -19,3 +19,7 @@ head_sampling_rate = 1
 
 [ai]
 binding = "AI"
+
+[[kv_namespaces]]
+binding = "BOT_MEMORY"
+id = "003dd4edcd8a4a8d96699c7cded27a39"
