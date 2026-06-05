@@ -38,8 +38,11 @@ export default {
 
 async function handleAiReply(env, employeeCode, text) {
   try {
-    const aiResponse = await env.AI.run('@cf/nvidia/nemotron-3-120b-a12b', {
-      prompt: text
+    const aiResponse = await env.AI.run('@cf/meta/llama-4-scout-17b-16e-instruct', {
+     messages: [
+    { role: "system", content: "Kamu adalah asisten yang membantu dan sopan." },
+    { role: "user", content: incomingText }
+      ]
     });
     
     // TAMBAHKAN INI UNTUK DEBUG
@@ -51,6 +54,9 @@ async function handleAiReply(env, employeeCode, text) {
     console.error("AI/Reply Error:", err);
   }
 }
+
+console.log("AI Output structure:", JSON.stringify(aiResponse)); 
+// Lihat di log terminal/dashboard, apakah properti yang benar adalah .response, .result, atau .message?
 
 async function replyToUser(messageText, employeeCode) {
   // Gunakan env variable untuk keamanan, jangan di-hardcode di script!
