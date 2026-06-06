@@ -23,3 +23,9 @@ binding = "AI"
 [[kv_namespaces]]
 binding = "BOT_MEMORY"
 id = "003dd4edcd8a4a8d96699c7cded27a39"
+
+# TAMBAHAN PENTING UNTUK CRON SCHEDULER
+# Ini membuat fungsi scheduled() di index.js berjalan setiap 1 menit.
+[triggers]
+crons = ["* * * * *"]
+```
