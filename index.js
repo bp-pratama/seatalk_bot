@@ -1,137 +1,129 @@
+/**
+ * index.js
+ * Bertindak sebagai Router (Polisi Lalu Lintas) dan Eksekutor Penjadwalan (Cron).
+ */
+
+import { handleGeneralChat } from './src/botCoding.js';
+import { extractIncomingText, sendSystemWebhook, replyToUser } from './src/utils.js';
+import { getHourlyReportData } from './src/botSheet.js';
+
 export default {
+  // 1. GERBANG MASUK CHAT (WEBHOOK SEATALK)
   async fetch(request, env, ctx) {
     if (request.method !== "POST") return new Response("Bot Active", { status: 200 });
 
     try {
       const payload = await request.json();
-      console.log("DEBUG: RAW PAYLOAD RECEIVED:", JSON.stringify(payload));
-
       const event = payload.event || {};
 
       if (payload.event_type === "event_verification") {
         return new Response(JSON.stringify({ "seatalk_challenge": event.seatalk_challenge }), {
-          status: 200,
-          headers: { "Content-Type": "application/json" }
+          status: 200, headers: { "Content-Type": "application/json" }
         });
       }
 
       const message = event.message || {};
-      let incomingText = "";
-      
-      if (typeof message.text === "string") {
-        incomingText = message.text;
-      } else if (typeof message.text === "object" && message.text !== null) {
-        incomingText = message.text.plain_text || message.text.content || "";
-      } else if (typeof message.content === "string") {
-        incomingText = message.content;
-      }
-      
-      incomingText = incomingText.trim();
-
+      const incomingText = extractIncomingText(message);
       const groupId = event.group_id;
       const employeeCode = event.employee_code || event.message?.sender?.employee_code || event.sender_id;
       
       const isGroup = !!groupId;
       const targetId = groupId || employeeCode;
-      
       const threadId = message.thread_id || ""; 
       const originalMessageId = message.message_id;
 
-      if (!incomingText || !targetId) {
-        return new Response("OK", { status: 200 });
+      if (!incomingText || !targetId) return new Response("OK", { status: 200 });
+
+      // -- ROUTING LOGIC (1 Antarmuka, Banyak Fungsi) --
+      
+      // A. Jika User mengetik perintah pengaturan jadwal cron
+      if (incomingText.startsWith("/set-report")) {
+        ctx.waitUntil(handleSetReport(env, incomingText, targetId, isGroup, threadId, originalMessageId));
+      } 
+      // B. (Opsional) Jika command khusus inventory
+      else if (incomingText.startsWith("/stok")) {
+        // ctx.waitUntil(handleInventoryQuery(...)); // dari botSheet.js
+      }
+      // C. Default: Masuk ke AI VA (Bot General)
+      else {
+        ctx.waitUntil(handleGeneralChat(env, targetId, incomingText, isGroup, threadId, originalMessageId));
       }
 
-      console.log(`DEBUG: Memproses ${isGroup ? "GRUP" : "JAPRI"} - Target ID: ${targetId} | Thread ID: ${threadId} | Pesan: ${incomingText}`);
-
-      await handleAiReply(env, targetId, incomingText, isGroup, threadId, originalMessageId);
-
       return new Response(JSON.stringify({ "code": 0 }), { status: 200 });
+      
     } catch (error) {
       console.log("DEBUG: Fatal Error di fetch:", error.message);
       return new Response("OK", { status: 200 });
     }
+  },
+
+  // 2. GERBANG MASUK PENJADWALAN (CRON TRIGGERS)
+  // Dipicu setiap menit secara otomatis oleh setting di wrangler.toml
+  async scheduled(event, env, ctx) {
+    ctx.waitUntil(executeDynamicScheduler(env));
   }
 };
 
-async function handleAiReply(env, targetId, text, isGroup, threadId, originalMessageId) {
+// ==========================================
+// FUNGSI KHUSUS UNTUK INDEX.JS (ROUTER)
+// ==========================================
+
+// Fungsi mendaftarkan jadwal ke KV
+async function handleSetReport(env, text, targetId, isGroup, threadId, originalMessageId) {
+  // Format: /set-report NamaLaporan https://webhook.url 15
+  const parts = text.split(" ");
+  if (parts.length < 4) {
+    await replyToUser("Format salah. Gunakan: `/set-report [NamaLaporan] [Webhook_URL] [Menit_0-59]`", targetId, isGroup, threadId, originalMessageId);
+    return;
+  }
+
+  const name = parts[1];
+  const webhookUrl = parts[2];
+  const minute = parseInt(parts[3], 10);
+
   try {
-    const kvKey = `history_${targetId}`;
-    let history = [];
+    let cronJobs = [];
+    const rawJobs = await env.BOT_MEMORY.get("cron_jobs");
+    if (rawJobs) cronJobs = JSON.parse(rawJobs);
 
-    try {
-      const rawHistory = await env.BOT_MEMORY.get(kvKey);
-      if (rawHistory) {
-         history = JSON.parse(rawHistory);
-         if (!Array.isArray(history)) history = [];
-      }
-    } catch (e) {
-      console.log("DEBUG: History format invalid, mereset memori.");
-      history = [];
-    }
+    // Filter duplikat jika nama sama
+    cronJobs = cronJobs.filter(job => job.name !== name);
+    cronJobs.push({ name, webhookUrl, minute });
 
-    history.push({ role: "user", content: text });
-    if (history.length > 6) history = history.slice(-6);
-
-    const aiResponse = await env.AI.run('@cf/meta/llama-3.1-8b-instruct', {
-      messages: [{ role: "system", content: "Kamu asisten yang ramah." }, ...history],
-    });
-
-    const reply = aiResponse.response || "Maaf, saya tidak mengerti.";
-    
-    history.push({ role: "assistant", content: reply });
-    await env.BOT_MEMORY.put(kvKey, JSON.stringify(history), { expirationTtl: 3600 });
-    
-    await replyToUser(reply, targetId, isGroup, threadId, originalMessageId);
+    await env.BOT_MEMORY.put("cron_jobs", JSON.stringify(cronJobs));
+    await replyToUser(`✅ Jadwal laporan '${name}' berhasil didaftarkan. Laporan akan dikirim setiap jam pada menit ke-${minute} via System Account.`, targetId, isGroup, threadId, originalMessageId);
   } catch (err) {
-    console.log("DEBUG: Error di AI:", err.message);
+    await replyToUser("Gagal menyimpan jadwal.", targetId, isGroup, threadId, originalMessageId);
   }
 }
 
-async function replyToUser(messageText, targetId, isGroup, threadId, originalMessageId) {
-  const APP_ID = "NzE2Mjg3ODUxMjc5"; 
-  const APP_SECRET = "c3urIS7asdvFi0rIwbhuAKBklGWY1yQv";
+// Fungsi eksekusi scheduler dinamis (Heartbeat checker)
+async function executeDynamicScheduler(env) {
+  try {
+    // Dapatkan menit saat ini di WIB (UTC+7)
+    const now = new Date();
+    const currentMinute = now.toLocaleString("en-US", { timeZone: "Asia/Jakarta", minute: "numeric" });
+    const targetMinute = parseInt(currentMinute, 10);
 
-  const tokenRes = await fetch("https://openapi.seatalk.io/auth/app_access_token", {
-    method: "POST",
-    headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ app_id: APP_ID, app_secret: APP_SECRET })
-  });
-  
-  const tokenData = await tokenRes.json();
-  if (!tokenData.app_access_token) return;
+    const rawJobs = await env.BOT_MEMORY.get("cron_jobs");
+    if (!rawJobs) return;
+    
+    const cronJobs = JSON.parse(rawJobs);
+    
+    // Cari jadwal yang menitnya cocok dengan menit saat ini
+    const jobsToRun = cronJobs.filter(job => job.minute === targetMinute);
 
-  const endpoint = isGroup 
-    ? "https://openapi.seatalk.io/messaging/v2/group_chat" 
-    : "https://openapi.seatalk.io/messaging/v2/single_chat";
-
-  let body;
-  if (isGroup) {
-      body = { 
-          group_id: targetId, // <---- PERBAIKAN: Menggunakan group_id
-          message: { tag: "text", text: { content: messageText } } 
-      };
+    if (jobsToRun.length > 0) {
+      // Ambil data laporan (Contoh mengambil dari GSheets via modul botSheet)
+      const reportText = await getHourlyReportData(env);
       
-      if (threadId && threadId !== "") {
-          body.thread_id = threadId;
-      } else if (originalMessageId) {
-          body.thread_id = originalMessageId; 
-      }
-  } else {
-      body = { 
-          employee_code: targetId, 
-          message: { tag: "text", text: { content: messageText } } 
-      };
+      // Eksekusi semua tembakan webhook secara paralel
+      await Promise.all(
+        jobsToRun.map(job => sendSystemWebhook(job.webhookUrl, reportText))
+      );
+      console.log(`DEBUG: Menjalankan ${jobsToRun.length} jadwal cron pada menit ke-${targetMinute}`);
+    }
+  } catch (err) {
+    console.log("DEBUG: Error di Dynamic Scheduler:", err.message);
   }
-
-  const resp = await fetch(endpoint, {
-    method: "POST",
-    headers: { 
-      "Content-Type": "application/json", 
-      "Authorization": `Bearer ${tokenData.app_access_token}` 
-    },
-    body: JSON.stringify(body)
-  });
-
-  const resData = await resp.json();
-  console.log(`DEBUG: Status Kirim ${isGroup ? "Grup" : "Japri"} (${resp.status}):`, JSON.stringify(resData));
 }
