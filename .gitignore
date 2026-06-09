@@ -4,3 +4,4 @@ node_modules/
 .output/
 .dist/
 node_modules/
+upload_key.sh
