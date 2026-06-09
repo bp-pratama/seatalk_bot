@@ -410,3 +410,12 @@ export async function handleScreenshotCommand(env, targetId, text, isGroup, thre
         await replyToUser(env, `❌ ${err.message}`, targetId, isGroup, threadId, originalMessageId);
     }
 }
+
+export async function getHourlyReportData(env) {
+    return "Data Laporan (Sistem sedang disinkronisasi)";
+}
+
+export async function handleInventoryQuery(env, targetId, text, isGroup, threadId, originalMessageId) {
+    console.log("DEBUG: handleInventoryQuery dipanggil.");
+    return null;
+}
