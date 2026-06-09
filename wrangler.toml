@@ -24,8 +24,19 @@ binding = "AI"
 binding = "BOT_MEMORY"
 id = "003dd4edcd8a4a8d96699c7cded27a39"
 
+<<<<<<< HEAD
 # TAMBAHAN PENTING UNTUK CRON SCHEDULER
 # Ini membuat fungsi scheduled() di index.js berjalan setiap 1 menit.
 [triggers]
 crons = ["* * * * *"]
 ```
+=======
+[triggers]
+crons = ["* * * * *"]
+
+[vars]
+GOOGLE_CLIENT_EMAIL = "vasa-725@studio-1196053014-a94d0.iam.gserviceaccount.com"
+SEATALK_APP_ID = "NzE2Mjg3ODUxMjc5"
+# PENTING: Untuk production, jadikan SEATALK_APP_SECRET dan GOOGLE_PRIVATE_KEY sebagai rahasia menggunakan `wrangler secret put`
+SEATALK_APP_SECRET = "c3urIS7asdvFi0rIwbhuAKBklGWY1yQv"
+>>>>>>> c686c6e (fix: resolved spreadsheet access, parameter sync, and tab lookup logic)
