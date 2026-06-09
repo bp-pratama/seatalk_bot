@@ -97,7 +97,69 @@ export async function sendSystemWebhook(webhookUrl, messageText) {
   }
 }
 
+// FUNGSI PENGIRIMAN GAMBAR KE SEATALK VIA BASE64 (LEBIH AMAN & STABIL)
 export async function sendScreenshotToUser(env, buffer, targetId, isGroup, threadId) {
-    console.log("DEBUG: sendScreenshotToUser dipanggil, fitur segera disesuaikan.");
-    return null;
+  try {
+    // 1. Ambil Token SeaTalk
+    const cacheKey = "seatalk_access_token";
+    let token = await env.BOT_MEMORY.get(cacheKey);
+
+    if (!token) {
+      const tokenRes = await fetch("https://openapi.seatalk.io/auth/app_access_token", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ app_id: env.SEATALK_APP_ID, app_secret: env.SEATALK_APP_SECRET })
+      });
+      const tokenData = await tokenRes.json();
+      token = tokenData.app_access_token;
+      await env.BOT_MEMORY.put(cacheKey, token, { expirationTtl: 7000 });
+    }
+
+    // 2. Konversi Buffer (Gambar PNG) secara aman menjadi Base64
+    let binary = '';
+    const bytes = new Uint8Array(buffer);
+    const len = bytes.byteLength;
+    for (let i = 0; i < len; i++) {
+      binary += String.fromCharCode(bytes[i]);
+    }
+    const base64Image = btoa(binary);
+
+    // 3. Kirim base64 secara LANGSUNG sebagai pesan ke User/Grup
+    const endpoint = isGroup 
+      ? "https://openapi.seatalk.io/messaging/v2/group_chat" 
+      : "https://openapi.seatalk.io/messaging/v2/single_chat";
+
+    let body = isGroup ? { group_id: targetId } : { employee_code: targetId };
+    
+    body.message = { 
+      tag: "image", 
+      image_base64: { content: base64Image } 
+    };
+
+    if (isGroup && threadId && threadId !== "") {
+        body.thread_id = threadId;
+    }
+
+    const sendRes = await fetch(endpoint, {
+      method: "POST",
+      headers: { 
+        "Content-Type": "application/json", 
+        "Authorization": `Bearer ${token}` 
+      },
+      body: JSON.stringify(body)
+    });
+
+    const sendData = await sendRes.json();
+    
+    if (sendData.code !== 0) {
+        console.log("DEBUG API SeaTalk Send Response:", sendData);
+        throw new Error("Gagal mengirim pesan gambar: " + sendData.message);
+    }
+
+    return sendData;
+
+  } catch (error) {
+    console.error("DEBUG: Error di sendScreenshotToUser:", error.message);
+    return null; 
+  }
 }

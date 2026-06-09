@@ -5,7 +5,7 @@
 
 import { handleGeneralChat } from './src/botCoding.js';
 import { extractIncomingText, sendSystemWebhook, replyToUser } from './src/utils.js';
-import { getHourlyReportData, handleInventoryQuery, handleSetSheet, handleReadSheet } from './src/botSheet.js';
+import { getHourlyReportData, handleInventoryQuery, handleSetSheet, handleReadSheet, handleScreenshotCommand } from './src/botSheet.js';
 
 export default {
   // 1. GERBANG MASUK CHAT (WEBHOOK SEATALK)
@@ -40,6 +40,9 @@ export default {
         await handleSetSheet(env, targetId, incomingText, isGroup, threadId, messageId);
       } else if (incomingText.startsWith("/readsheet")) {
         await handleReadSheet(env, targetId, incomingText, isGroup, threadId, messageId);
+      } else if (incomingText.startsWith("/screenshot")) {
+        // Rute khusus Screenshot ditambahkan agar tidak lari ke AI
+        await handleScreenshotCommand(env, targetId, incomingText, isGroup, threadId, messageId);
       } else {
         await handleGeneralChat(env, targetId, incomingText, isGroup, threadId, messageId);
       }
