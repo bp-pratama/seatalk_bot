@@ -26,12 +26,20 @@ function bufferToBase64(buffer) {
 }
 
 async function getSeatalkToken(appId, appSecret) {
+  console.log('SeaTalk auth request: appId=', appId ? 'SET' : 'MISSING', 'appSecret=', appSecret ? 'SET' : 'MISSING');
   const res = await fetch('https://openapi.seatalk.io/auth/app_access_token', {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify({ app_id: appId, app_secret: appSecret })
   });
-  const data = await res.json();
+  const responseText = await res.text();
+  let data;
+  try {
+    data = JSON.parse(responseText);
+  } catch (err) {
+    throw new Error('Gagal parse response SeaTalk auth: ' + responseText);
+  }
+  console.log('SeaTalk auth response status:', res.status, 'body:', JSON.stringify(data));
   if (!data?.app_access_token) {
     throw new Error('Gagal mendapatkan token SeaTalk: ' + JSON.stringify(data));
   }
@@ -103,6 +111,15 @@ async function run() {
     const seatalkIsGroup = process.env.SEATALK_IS_GROUP === '1';
     const seatalkThreadId = process.env.SEATALK_THREAD_ID || '';
     const seatalkOriginalMessageId = process.env.SEATALK_ORIGINAL_MESSAGE_ID || '';
+
+    console.log('SeaTalk env debug:', {
+      targetId: seatalkTargetId ? 'SET' : 'MISSING',
+      appId: seatalkAppId ? 'SET' : 'MISSING',
+      appSecret: seatalkAppSecret ? 'SET' : 'MISSING',
+      isGroup: seatalkIsGroup,
+      threadId: seatalkThreadId ? 'SET' : 'EMPTY',
+      originalMessageId: seatalkOriginalMessageId ? 'SET' : 'EMPTY'
+    });
 
     if (seatalkTargetId && seatalkAppId && seatalkAppSecret) {
       console.log(`Sending screenshot to SeaTalk target ${seatalkTargetId}`);
