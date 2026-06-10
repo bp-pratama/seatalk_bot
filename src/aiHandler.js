@@ -5,8 +5,8 @@
 
 // Katalog Model AI yang digunakan (Gratis via CF Workers)
 export const AI_MODELS = {
-  CHAT_GENERAL: '@cf/meta/llama-3.1-8b-instruct',  // Model utama yang pintar dan ramah
-  SUMMARY_FAST: '@cf/qwen/qwen1.5-0.5b-chat',      // Model sangat ringan khusus untuk merangkum
+  CHAT_GENERAL: '@cf/meta/llama-4-scout-17b-16e-instruct',  // Model utama yang pintar dan ramah
+  SUMMARY_FAST: '@cf/meta/llama-4-scout-17b-16e-instruct',      // Model sangat ringan khusus untuk merangkum
   CODING_LOGIC: '@cf/meta/llama-4-scout-17b-16e-instruct'     // (Opsional) jika butuh model khusus logika/koding
 };
 

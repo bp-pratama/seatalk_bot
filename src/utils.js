@@ -129,37 +129,62 @@ export async function sendScreenshotToUser(env, buffer, targetId, isGroup, threa
       ? "https://openapi.seatalk.io/messaging/v2/group_chat" 
       : "https://openapi.seatalk.io/messaging/v2/single_chat";
 
-    let body = isGroup ? { group_id: targetId } : { employee_code: targetId };
-    
-    body.message = { 
-      tag: "image", 
-      image_base64: { content: base64Image } 
-    };
+    const requestBase = isGroup ? { group_id: targetId } : { employee_code: targetId };
+    const messageVariants = [
+      { tag: "image", image_base64: { content: base64Image } },
+      { tag: "image", image: { base64: base64Image } },
+      { tag: "image", image: { base64: base64Image, type: "image/png" } },
+      { tag: "image", image: { content: base64Image } },
+      { tag: "image", image: { content: base64Image, type: "image/png" } },
+      { tag: "image", image_base64: base64Image },
+      { tag: "image", image: { data: base64Image } },
+      { tag: "image", image: { data: base64Image, type: "image/png" } },
+      { tag: "image", image_base64: { data: base64Image } }
+    ];
 
-    if (isGroup && threadId && threadId !== "") {
-        body.thread_id = threadId;
+    let lastError = null;
+
+    for (const variant of messageVariants) {
+      const requestBody = { ...requestBase, message: variant };
+      if (isGroup && threadId && threadId !== "") {
+        requestBody.thread_id = threadId;
+      }
+
+      console.log("DEBUG: SeaTalk image request variant", {
+        message: {
+          tag: variant.tag,
+          payloadType: variant.image ? "image" : "image_base64",
+          contentLength: (variant.image?.base64 || variant.image?.content || variant.image_base64?.content || variant.image_base64 || "").length,
+          hasType: Boolean(variant.image?.type)
+        }
+      });
+
+      const sendRes = await fetch(endpoint, {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+          "Authorization": `Bearer ${token}`
+        },
+        body: JSON.stringify(requestBody)
+      });
+
+      const sendData = await sendRes.json();
+      if (sendData.code === 0) {
+        return sendData;
+      }
+
+      console.log("DEBUG API SeaTalk Send Response:", sendData);
+      lastError = sendData;
+
+      if (sendData.code !== 4003 || typeof sendData.message !== "string" || !sendData.message.includes("Message cannot be empty")) {
+        continue;
+      }
     }
 
-    const sendRes = await fetch(endpoint, {
-      method: "POST",
-      headers: { 
-        "Content-Type": "application/json", 
-        "Authorization": `Bearer ${token}` 
-      },
-      body: JSON.stringify(body)
-    });
-
-    const sendData = await sendRes.json();
-    
-    if (sendData.code !== 0) {
-        console.log("DEBUG API SeaTalk Send Response:", sendData);
-        throw new Error("Gagal mengirim pesan gambar: " + sendData.message);
-    }
-
-    return sendData;
+    throw new Error("Gagal mengirim pesan gambar: " + (lastError?.message || "Unknown error"));
 
   } catch (error) {
     console.error("DEBUG: Error di sendScreenshotToUser:", error.message);
-    return null; 
+    throw error;
   }
 }
