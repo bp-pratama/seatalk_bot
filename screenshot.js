@@ -137,6 +137,28 @@ async function sendScreenshotToSeatalk(appId, appSecret, targetId, isGroup, thre
   throw new Error('SeaTalk image upload failed: ' + JSON.stringify(lastError));
 }
 
+async function sendTextToSeatalk(appId, appSecret, targetId, isGroup, threadId, text) {
+  const token = await getSeatalkToken(appId, appSecret);
+  const endpoint = isGroup ? 'https://openapi.seatalk.io/messaging/v2/group_chat' : 'https://openapi.seatalk.io/messaging/v2/single_chat';
+  const requestBase = isGroup ? { group_id: targetId } : { employee_code: targetId };
+  const requestBody = { ...requestBase, message: { tag: 'text', text: { content: text } } };
+  if (isGroup && threadId) requestBody.thread_id = threadId;
+
+  const res = await fetch(endpoint, {
+    method: 'POST',
+    headers: {
+      'Content-Type': 'application/json',
+      'Authorization': `Bearer ${token}`
+    },
+    body: JSON.stringify(requestBody)
+  });
+  try {
+    return await res.json();
+  } catch (e) {
+    return { code: -1, message: 'Invalid response from SeaTalk' };
+  }
+}
+
 async function run() {
   const targetUrl = process.env.TARGET_URL;
   if (!targetUrl) {
@@ -172,6 +194,49 @@ async function run() {
     } else {
       console.log(`Navigating to ${targetUrl}`);
       await page.goto(targetUrl, { waitUntil: 'networkidle2', timeout: 60000 });
+
+      // Detect Google sign-in portal or redirect
+      let onAccounts = page.url().includes('accounts.google.com');
+      try {
+        const emailInput = await page.$('input[type="email"]');
+        if (emailInput) onAccounts = true;
+      } catch (e) {}
+
+      if (onAccounts) {
+        console.log('Detected Google sign-in portal.');
+        if (process.env.GOOGLE_EMAIL && process.env.GOOGLE_PASSWORD) {
+          try {
+            // Try to sign in
+            await page.waitForSelector('input[type="email"]', { timeout: 8000 });
+            await page.type('input[type="email"]', process.env.GOOGLE_EMAIL, { delay: 50 });
+            const nextBtn = await page.$('#identifierNext button, #identifierNext');
+            if (nextBtn) await nextBtn.click();
+            await page.waitForTimeout(1000);
+            await page.waitForSelector('input[type="password"]', { timeout: 8000 });
+            await page.type('input[type="password"]', process.env.GOOGLE_PASSWORD, { delay: 50 });
+            const passNext = await page.$('#passwordNext button, #passwordNext');
+            if (passNext) await passNext.click();
+            // wait for navigation back to target
+            await page.waitForNavigation({ waitUntil: 'networkidle2', timeout: 20000 });
+            console.log('Google sign-in attempted. Current URL:', page.url());
+            // navigate to target again to ensure loaded
+            await page.goto(targetUrl, { waitUntil: 'networkidle2', timeout: 60000 });
+          } catch (err) {
+            throw new Error('Google sign-in failed: ' + (err && err.message ? err.message : err));
+          }
+        } else {
+          throw new Error('Google sign-in required but credentials not provided (set GOOGLE_EMAIL and GOOGLE_PASSWORD)');
+        }
+      }
+
+      // After navigation, check for access-denied text
+      const bodyText = await page.evaluate(() => document.body.innerText || '');
+      const accessDeniedKeywords = ['You need access', 'You need permission', 'Request access', "doesn't have access", 'Sign in'];
+      for (const kw of accessDeniedKeywords) {
+        if (bodyText.includes(kw) && !page.url().includes('accounts.google.com')) {
+          throw new Error('Access denied or login required: ' + kw);
+        }
+      }
     }
 
     const screenshotBuffer = await page.screenshot({ fullPage: false });
