@@ -195,46 +195,20 @@ async function run() {
       console.log(`Navigating to ${targetUrl}`);
       await page.goto(targetUrl, { waitUntil: 'networkidle2', timeout: 60000 });
 
-      // Detect Google sign-in portal or redirect
-      let onAccounts = page.url().includes('accounts.google.com');
-      try {
-        const emailInput = await page.$('input[type="email"]');
-        if (emailInput) onAccounts = true;
-      } catch (e) {}
-
-      if (onAccounts) {
-        console.log('Detected Google sign-in portal.');
-        if (process.env.GOOGLE_EMAIL && process.env.GOOGLE_PASSWORD) {
-          try {
-            // Try to sign in
-            await page.waitForSelector('input[type="email"]', { timeout: 8000 });
-            await page.type('input[type="email"]', process.env.GOOGLE_EMAIL, { delay: 50 });
-            const nextBtn = await page.$('#identifierNext button, #identifierNext');
-            if (nextBtn) await nextBtn.click();
-            await page.waitForTimeout(1000);
-            await page.waitForSelector('input[type="password"]', { timeout: 8000 });
-            await page.type('input[type="password"]', process.env.GOOGLE_PASSWORD, { delay: 50 });
-            const passNext = await page.$('#passwordNext button, #passwordNext');
-            if (passNext) await passNext.click();
-            // wait for navigation back to target
-            await page.waitForNavigation({ waitUntil: 'networkidle2', timeout: 20000 });
-            console.log('Google sign-in attempted. Current URL:', page.url());
-            // navigate to target again to ensure loaded
-            await page.goto(targetUrl, { waitUntil: 'networkidle2', timeout: 60000 });
-          } catch (err) {
-            throw new Error('Google sign-in failed: ' + (err && err.message ? err.message : err));
-          }
-        } else {
-          throw new Error('Google sign-in required but credentials not provided (set GOOGLE_EMAIL and GOOGLE_PASSWORD)');
-        }
-      }
-
-      // After navigation, check for access-denied text
+      // Check for access-denied or login portal
       const bodyText = await page.evaluate(() => document.body.innerText || '');
-      const accessDeniedKeywords = ['You need access', 'You need permission', 'Request access', "doesn't have access", 'Sign in'];
+      const url = page.url();
+      
+      // Detect Google sign-in portal (jika kena portal, berarti tidak ada akses)
+      if (url.includes('accounts.google.com')) {
+        throw new Error('Access denied: spreadsheet memerlukan Google sign-in. Pastikan service account sudah di-share sebagai Viewer.');
+      }
+      
+      // Check for access-denied keywords
+      const accessDeniedKeywords = ['You need access', 'You need permission', 'Request access', "doesn't have access"];
       for (const kw of accessDeniedKeywords) {
-        if (bodyText.includes(kw) && !page.url().includes('accounts.google.com')) {
-          throw new Error('Access denied or login required: ' + kw);
+        if (bodyText.includes(kw)) {
+          throw new Error('Access denied: ' + kw + '. Pastikan service account sudah di-share.');
         }
       }
     }
@@ -275,7 +249,21 @@ async function run() {
       console.log('SeaTalk target not configured. Screenshot saved locally only.');
     }
   } catch (err) {
-    console.error('Screenshot failed:', err && err.message ? err.message : err);
+    const errMsg = err && err.message ? err.message : String(err);
+    console.error('Screenshot failed:', errMsg);
+    // Try to notify user on SeaTalk about failure
+    try {
+      const seatalkTargetId = process.env.SEATALK_TARGET_ID || '';
+      const seatalkAppId = process.env.SEATALK_APP_ID || '';
+      const seatalkAppSecret = process.env.SEATALK_APP_SECRET || '';
+      const seatalkIsGroup = process.env.SEATALK_IS_GROUP === '1';
+      const seatalkThreadId = process.env.SEATALK_THREAD_ID || '';
+      if (seatalkTargetId && seatalkAppId && seatalkAppSecret) {
+        await sendTextToSeatalk(seatalkAppId, seatalkAppSecret, seatalkTargetId, seatalkIsGroup, seatalkThreadId, `Screenshot gagal: ${errMsg}`);
+      }
+    } catch (notifyErr) {
+      console.error('Failed to notify via SeaTalk:', notifyErr && notifyErr.message ? notifyErr.message : notifyErr);
+    }
     process.exitCode = 2;
   } finally {
     try {

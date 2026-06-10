@@ -36,6 +36,8 @@ jobs:
       TARGET_URL: ${{ github.event.inputs.target_url || secrets.TARGET_URL }}
       SEATALK_APP_ID: ${{ secrets.SEATALK_APP_ID }}
       SEATALK_APP_SECRET: ${{ secrets.SEATALK_APP_SECRET }}
+      GSA_JSON_BASE64: ${{ secrets.GSA_JSON_BASE64 }}
+      SPREADSHEET_ID: ${{ secrets.SPREADSHEET_ID || '' }}
       SEATALK_TARGET_ID: ${{ github.event.inputs.target_id || '' }}
       SEATALK_IS_GROUP: ${{ github.event.inputs.is_group || '0' }}
       SEATALK_THREAD_ID: ${{ github.event.inputs.thread_id || '' }}

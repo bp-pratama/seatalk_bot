@@ -3,7 +3,7 @@
  * Engine pemrosesan Google Sheets dan rendering biner.
  */
 
-import { replyToUser } from './utils.js';
+import { replyToUser, sendScreenshotToUser } from './utils.js';
 import { importPKCS8, SignJWT } from 'jose';
 
 async function parseJsonResponse(response, context) {
@@ -151,54 +151,63 @@ export async function generatePrivateSheetBuffer(env, spreadsheetId, tabName = "
     // 3. Construct Google Sheets URL untuk di-screenshot
     // Format: https://docs.google.com/spreadsheets/d/{id}/edit#gid={gid}
     const sheetsUrl = `https://docs.google.com/spreadsheets/d/${spreadsheetId}/edit#gid=${sheetGid}`;
-    return { sheetsUrl, targetSheetTitle };
-}
 
-async function triggerScreenshotWorkflow(env, targetUrl, targetId, isGroup, threadId, originalMessageId) {
-    // GITHUB_TRIGGER_TOKEN harus berupa GitHub Personal Access Token.
-    // Fine-grained PAT direkomendasikan dan harus memiliki akses Actions + repo ke repository ini.
-    const token = env.GITHUB_TRIGGER_TOKEN;
-    if (!token) throw new Error("GITHUB_TRIGGER_TOKEN tidak dikonfigurasi. Tambahkan secret di environment.");
+    // 4. Gunakan urlbox.io untuk screenshot
+    // Dokumentasi: https://urlbox.io/docs
+    if (!env.URLBOX_API_KEY) {
+        throw new Error("URLBOX_API_KEY tidak dikonfigurasi di environment variables.");
+    }
 
-    const repo = env.GITHUB_REPOSITORY || 'bp-pratama/seatalk_bot';
-    const parts = repo.split('/');
-    if (parts.length !== 2) throw new Error("GITHUB_REPOSITORY harus dalam format owner/repo atau set env.GITHUB_REPOSITORY.");
-    const owner = parts[0];
-    const repoName = parts[1];
-
-    const workflowId = 'screenshot.yml';
-    const url = `https://api.github.com/repos/${owner}/${repoName}/actions/workflows/${workflowId}/dispatches`;
-    const inputs = {
-      target_url: targetUrl,
-      target_id: targetId,
-      is_group: isGroup ? '1' : '0',
-      thread_id: threadId || '',
-      original_message_id: originalMessageId || ''
+    const urlboxApiUrl = "https://api.urlbox.io/v1/render";
+    const urlboxParams = {
+        url: sheetsUrl,
+        width: 1200,
+        height: 800,
+        format: "png",
+        full_page: false,
+        timeout: 30,
+        wait_for: ".waffle-container", // Wait for Sheets to load
+        retina: false
     };
 
-    console.log(`Dispatching workflow to GitHub: ${url} with inputs: ${JSON.stringify(inputs)}`);
-    const res = await fetch(url, {
-        method: 'POST',
+    // Encode parameters untuk Basic Auth
+    const authHeader = `Basic ${btoa(`${env.URLBOX_API_KEY}:`)}`;
+
+    console.log(`Requesting screenshot from urlbox.io: ${sheetsUrl}`);
+
+    const urlboxRes = await fetch(urlboxApiUrl, {
+        method: "POST",
         headers: {
-            'Authorization': `token ${token}`,
-            'Accept': 'application/vnd.github.v3+json',
-            'Content-Type': 'application/json',
-            'User-Agent': 'seatalk-bot'
+            "Authorization": authHeader,
+            "Content-Type": "application/json"
         },
-        body: JSON.stringify({ ref: 'main', inputs })
+        body: JSON.stringify(urlboxParams)
     });
 
-    console.log(`Workflow dispatch response: ${res.status} ${res.statusText}`);
-    if (res.status === 204) {
-      console.log('Workflow dispatch accepted by GitHub.');
-      return true;
+    console.log(`Urlbox response status: ${urlboxRes.status}`);
+
+    if (!urlboxRes.ok) {
+        const errorText = await urlboxRes.text();
+        console.log(`Urlbox error: ${errorText.substring(0, 300)}`);
+        throw new Error(`Gagal mengambil screenshot dari urlbox.io: HTTP ${urlboxRes.status}`);
     }
-    const txt = await res.text();
-    console.log(`Workflow dispatch response body: ${txt.substring(0, 1000)}`);
-    if (res.status === 404) {
-      throw new Error(`Gagal memicu workflow: HTTP 404 - Not Found. Pastikan GITHUB_TRIGGER_TOKEN memiliki akses ke repo dan Actions, serta workflow file '.github/workflows/screenshot.yml' benar-benar ada.`);
+
+    const buffer = await urlboxRes.arrayBuffer();
+    console.log(`Screenshot buffer size: ${buffer.byteLength} bytes`);
+
+    if (buffer.byteLength < 100) {
+        throw new Error("Screenshot hasil dari urlbox.io tidak valid atau kosong.");
     }
-    throw new Error(`Gagal memicu workflow: HTTP ${res.status} - ${txt.substring(0,300)}`);
+
+    // 5. Validasi PNG signature
+    const header = new Uint8Array(buffer.slice(0, 8));
+    const pngSignature = [0x89, 0x50, 0x4E, 0x47, 0x0D, 0x0A, 0x1A, 0x0A];
+    if (!pngSignature.every((byte, index) => header[index] === byte)) {
+        console.log(`Invalid PNG signature, hex: ${Array.from(header).map(b => b.toString(16)).join(' ')}`);
+        throw new Error("Screenshot bukan PNG yang valid.");
+    }
+
+    return buffer;
 }
 
 export async function handleSetSheet(env, targetId, text, isGroup, threadId, originalMessageId) {
@@ -269,11 +278,60 @@ function parseScreenshotArguments(tokens) {
     return { tabName: tabNameParts.join(" ").trim(), customRange };
 }
 
+async function triggerScreenshotWorkflow(env, spreadsheetId, targetId, isGroup, threadId, originalMessageId) {
+    const repo = env.GITHUB_REPOSITORY || 'bp-pratama/seatalk_bot';
+    const [owner, repoName] = repo.split('/');
+    const url = `https://api.github.com/repos/${owner}/${repoName}/actions/workflows/screenshot.yml/dispatches`;
+    
+    const payload = {
+        ref: 'main',
+        inputs: {
+            target_id: targetId || '',
+            is_group: isGroup ? '1' : '0',
+            thread_id: threadId || '',
+            original_message_id: originalMessageId || ''
+        }
+    };
+    
+    const token = env.GITHUB_TRIGGER_TOKEN;
+    if (!token) {
+        console.error('GITHUB_TRIGGER_TOKEN tidak tersedia');
+        return null;
+    }
+
+    console.log(`DEBUG: Dispatching workflow with SPREADSHEET_ID=${spreadsheetId}`);
+    
+    const res = await fetch(url, {
+        method: 'POST',
+        headers: {
+            'Authorization': `token ${token}`,
+            'Content-Type': 'application/json',
+            'User-Agent': 'seatalk-bot'
+        },
+        body: JSON.stringify(payload)
+    });
+    
+    const text = await res.text();
+    console.log(`Workflow dispatch response: status=${res.status} body=${text.substring(0, 300)}`);
+    
+    if (res.status === 204) {
+        console.log('Workflow dispatch accepted');
+        return { success: true, spreadsheetId };
+    }
+    
+    try {
+        const data = JSON.parse(text);
+        console.log('Workflow dispatch error:', data);
+    } catch (e) {}
+    
+    return null;
+}
+
 export async function handleScreenshotCommand(env, targetId, text, isGroup, threadId, originalMessageId) {
     const args = text.replace(/^\S+\s*/, "").trim();
     const tokens = args.split(/\s+/).filter(Boolean);
     
-    // Cari sheet ID, tab name, dan custom range
+    // Cari sheet ID dari URL atau dari memory
     const explicitSheetId = extractSpreadsheetId(args) || (tokens[0] && extractSpreadsheetId(tokens[0]));
     const sheetId = explicitSheetId || await env.BOT_MEMORY.get(`default_sheet_${targetId}`);
     
@@ -286,15 +344,13 @@ export async function handleScreenshotCommand(env, targetId, text, isGroup, thre
     
     console.log(`Screenshot command: sheetId=${sheetId} tabName="${tabName}" customRange=${customRange}`);
     
-    try {
-        const { sheetsUrl, targetSheetTitle } = await generatePrivateSheetBuffer(env, sheetId, tabName, customRange);
-        console.log(`Prepared screenshot request: sheetsUrl=${sheetsUrl} targetSheetTitle=${targetSheetTitle}`);
-        await triggerScreenshotWorkflow(env, sheetsUrl, targetId, isGroup, threadId, originalMessageId);
-        console.log('Dispatch complete, reply to user confirms workflow is running.');
-        await replyToUser(env, `✅ Permintaan screenshot dikirim untuk sheet "${targetSheetTitle}". Workflow sedang berjalan dan hasil akan dikirim ke SeaTalk.`, targetId, isGroup, threadId, originalMessageId);
-    } catch (err) {
-        console.error(`Screenshot error: tabName="${tabName}" customRange="${customRange}" - ${err.message}`);
-        await replyToUser(env, `❌ ${err.message}`, targetId, isGroup, threadId, originalMessageId);
+    // Dispatch ke GitHub Actions workflow dengan SPREADSHEET_ID
+    const workflowResult = await triggerScreenshotWorkflow(env, sheetId, targetId, isGroup, threadId, originalMessageId);
+    
+    if (workflowResult?.success) {
+        await replyToUser(env, `✅ Permintaan screenshot dikirim untuk sheet "${tabName || 'default'}". Workflow sedang berjalan dan hasil akan dikirim ke SeaTalk.`, targetId, isGroup, threadId, originalMessageId);
+    } else {
+        await replyToUser(env, "❌ Gagal mengirim permintaan ke workflow. Coba lagi nanti.", targetId, isGroup, threadId, originalMessageId);
     }
 }
 
