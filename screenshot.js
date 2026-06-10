@@ -1,6 +1,7 @@
 import fs from 'fs';
 import path from 'path';
 import puppeteer from 'puppeteer';
+import { google } from 'googleapis';
 
 function getSystemChromePath() {
   const candidates = [
@@ -23,6 +24,46 @@ async function ensureDir(dir) {
 
 function bufferToBase64(buffer) {
   return Buffer.from(buffer).toString('base64');
+}
+
+function escapeHtml(text) {
+  return String(text)
+    .replace(/&/g, '&amp;')
+    .replace(/</g, '&lt;')
+    .replace(/>/g, '&gt;')
+    .replace(/"/g, '&quot;')
+    .replace(/'/g, '&#039;');
+}
+
+async function fetchSheetHtmlFromServiceAccount(spreadsheetId, range = 'A1:Z100') {
+  let authClient;
+  if (process.env.GSA_JSON_BASE64) {
+    const json = Buffer.from(process.env.GSA_JSON_BASE64, 'base64').toString('utf8');
+    const key = JSON.parse(json);
+    authClient = new google.auth.JWT(key.client_email, null, key.private_key, ['https://www.googleapis.com/auth/spreadsheets.readonly']);
+  } else if (process.env.GSA_PRIVATE_KEY && process.env.GOOGLE_CLIENT_EMAIL) {
+    const privateKey = process.env.GSA_PRIVATE_KEY.replace(/\\n/g, '\n');
+    authClient = new google.auth.JWT(process.env.GOOGLE_CLIENT_EMAIL, null, privateKey, ['https://www.googleapis.com/auth/spreadsheets.readonly']);
+  } else {
+    throw new Error('Service account credentials missing (set GSA_JSON_BASE64 or GSA_PRIVATE_KEY + GOOGLE_CLIENT_EMAIL)');
+  }
+
+  await authClient.authorize();
+  const sheets = google.sheets({ version: 'v4', auth: authClient });
+  const res = await sheets.spreadsheets.values.get({ spreadsheetId, range });
+  const values = res.data.values || [];
+
+  let html = '<!doctype html><html><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><style>body{font-family:Arial,Helvetica,sans-serif;padding:12px}table{border-collapse:collapse;width:100%}td,th{border:1px solid #e1e1e1;padding:8px;text-align:left}</style></head><body>';
+  html += '<table>';
+  for (const row of values) {
+    html += '<tr>';
+    for (const cell of row) {
+      html += `<td>${escapeHtml(cell)}</td>`;
+    }
+    html += '</tr>';
+  }
+  html += '</table></body></html>';
+  return html;
 }
 
 async function getSeatalkToken(appId, appSecret) {
@@ -123,8 +164,15 @@ async function run() {
     const page = await browser.newPage();
     await page.setViewport({ width: 1920, height: 1080 });
 
-    console.log(`Navigating to ${targetUrl}`);
-    await page.goto(targetUrl, { waitUntil: 'networkidle2', timeout: 60000 });
+    if (process.env.SPREADSHEET_ID) {
+      console.log('SPREADSHEET_ID found, rendering sheet via Service Account');
+      const range = process.env.SPREADSHEET_RANGE || 'A1:Z100';
+      const html = await fetchSheetHtmlFromServiceAccount(process.env.SPREADSHEET_ID, range);
+      await page.setContent(html, { waitUntil: 'networkidle0' });
+    } else {
+      console.log(`Navigating to ${targetUrl}`);
+      await page.goto(targetUrl, { waitUntil: 'networkidle2', timeout: 60000 });
+    }
 
     const screenshotBuffer = await page.screenshot({ fullPage: false });
     await fs.promises.writeFile(outPath, screenshotBuffer);
