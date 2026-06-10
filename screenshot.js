@@ -52,7 +52,11 @@ async function sendScreenshotToSeatalk(appId, appSecret, targetId, isGroup, thre
 
   const endpoint = isGroup ? 'https://openapi.seatalk.io/messaging/v2/group_chat' : 'https://openapi.seatalk.io/messaging/v2/single_chat';
   const requestBody = isGroup ? { group_id: targetId } : { employee_code: targetId };
-  requestBody.message = { tag: 'image', image: { base64: base64Image, type: 'image/png' } };
+  requestBody.message = {
+    tag: 'image',
+    image: { base64: base64Image, type: 'image/png' },
+    text: { content: 'Screenshot dari Seatalk bot' }
+  };
   if (isGroup && threadId) requestBody.thread_id = threadId;
   else if (isGroup && originalMessageId) requestBody.thread_id = originalMessageId;
 
