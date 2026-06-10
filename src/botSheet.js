@@ -3,7 +3,7 @@
  * Engine pemrosesan Google Sheets dan rendering biner.
  */
 
-import { replyToUser, sendScreenshotToUser } from './utils.js';
+import { replyToUser } from './utils.js';
 import { importPKCS8, SignJWT } from 'jose';
 
 async function parseJsonResponse(response, context) {
@@ -124,197 +124,75 @@ export async function silentReadSheetForAI(env, spreadsheetId, tabName = "") {
 
 export async function generatePrivateSheetBuffer(env, spreadsheetId, tabName = "", customRange = null) {
     const token = await getGoogleToken(env);
-    const metaRes = await fetch(`https://sheets.googleapis.com/v4/spreadsheets/${spreadsheetId}`, { headers: { "Authorization": `Bearer ${token}` } });
+    
+    // 1. Ambil metadata untuk mendapatkan GID dari sheet yang ditargetkan
+    const metaRes = await fetch(`https://sheets.googleapis.com/v4/spreadsheets/${spreadsheetId}`, { 
+        headers: { "Authorization": `Bearer ${token}` } 
+    });
     const metaData = await parseJsonResponse(metaRes, `Google Sheets metadata for ${spreadsheetId}`);
     const sheets = metaData?.sheets || [];
+    
     if (sheets.length === 0) {
         throw new Error("Spreadsheet tidak memiliki sheet.");
     }
-    let targetSheetTitle = sheets[0].properties.title;
+
+    // 2. Cari sheet berdasarkan nama atau gunakan sheet pertama
+    let targetSheet = sheets[0];
     if (tabName) {
         const foundSheet = sheets.find(s => s.properties.title.toLowerCase().includes(tabName.toLowerCase()));
-        if (foundSheet) targetSheetTitle = foundSheet.properties.title;
+        if (foundSheet) targetSheet = foundSheet;
     }
 
-    const range = customRange || "A1:Z50";
-    console.log(`Fetching ${spreadsheetId} / ${targetSheetTitle} / ${range}`);
-    const sheetRes = await fetch(`https://sheets.googleapis.com/v4/spreadsheets/${spreadsheetId}?ranges=${encodeURIComponent(`${targetSheetTitle}!${range}`)}&includeGridData=true`, { headers: { "Authorization": `Bearer ${token}` } });
-    const sheetData = await parseJsonResponse(sheetRes, `Google Sheets grid data for ${spreadsheetId}/${targetSheetTitle}/${range}`);
+    const targetSheetTitle = targetSheet.properties.title;
+    const sheetGid = targetSheet.properties.sheetId;
 
-    const sheet = sheetData?.sheets?.[0];
-    if (!sheet) {
-        throw new Error(`Tidak dapat mengambil data sheet "${targetSheetTitle}".`);
-    }
+    console.log(`Generating screenshot: ${spreadsheetId} / ${targetSheetTitle} (GID: ${sheetGid})`);
 
-    const gridData = sheet.data?.[0];
-    const rows = gridData?.rowData || [];
-    if (!rows || rows.length === 0) {
-        throw new Error(`Tidak ada data di sheet "${targetSheetTitle}" range ${range}.`);
-    }
+    // 3. Construct Google Sheets URL untuk di-screenshot
+    // Format: https://docs.google.com/spreadsheets/d/{id}/edit#gid={gid}
+    const sheetsUrl = `https://docs.google.com/spreadsheets/d/${spreadsheetId}/edit#gid=${sheetGid}`;
+    return { sheetsUrl, targetSheetTitle };
+}
 
-    const parseA1Cell = (a1) => {
-        const match = a1.match(/^([A-Z]{1,3})(\d+)$/);
-        if (!match) return { row: 0, col: 0 };
-        const col = match[1].split("").reduce((val, ch) => val * 26 + (ch.charCodeAt(0) - 64), 0) - 1;
-        return { row: Number(match[2]) - 1, col };
+async function triggerScreenshotWorkflow(env, targetUrl, targetId, isGroup, threadId, originalMessageId) {
+    // GITHUB_TRIGGER_TOKEN harus berupa GitHub Personal Access Token.
+    // Fine-grained PAT direkomendasikan dan harus memiliki akses Actions + repo ke repository ini.
+    const token = env.GITHUB_TRIGGER_TOKEN;
+    if (!token) throw new Error("GITHUB_TRIGGER_TOKEN tidak dikonfigurasi. Tambahkan secret di environment.");
+
+    const repo = env.GITHUB_REPOSITORY || 'bp-pratama/seatalk_bot';
+    const parts = repo.split('/');
+    if (parts.length !== 2) throw new Error("GITHUB_REPOSITORY harus dalam format owner/repo atau set env.GITHUB_REPOSITORY.");
+    const owner = parts[0];
+    const repoName = parts[1];
+
+    const workflowId = 'screenshot.yml';
+    const url = `https://api.github.com/repos/${owner}/${repoName}/actions/workflows/${workflowId}/dispatches`;
+    const inputs = {
+      target_url: targetUrl,
+      target_id: targetId,
+      is_group: isGroup ? '1' : '0',
+      thread_id: threadId || '',
+      original_message_id: originalMessageId || ''
     };
 
-    const [rangeStartA1, rangeEndA1] = range.split(":");
-    const rangeStart = parseA1Cell(rangeStartA1);
-    const rangeEnd = parseA1Cell(rangeEndA1);
-    const rangeRowCount = rangeEnd.row - rangeStart.row + 1;
-    const rangeColCount = rangeEnd.col - rangeStart.col + 1;
-    const normalizedRows = Array.from({ length: rangeRowCount }, (_, idx) => rows[idx]?.values || []);
-
-    const mergeMap = new Map();
-    const mergedCells = new Set();
-    const merges = sheet.merges || [];
-    for (const merge of merges) {
-        const startRow = merge.startRowIndex - rangeStart.row;
-        const endRow = merge.endRowIndex - rangeStart.row;
-        const startCol = merge.startColumnIndex - rangeStart.col;
-        const endCol = merge.endColumnIndex - rangeStart.col;
-        if (startRow >= 0 && startCol >= 0 && endRow <= rangeRowCount && endCol <= rangeColCount) {
-            mergeMap.set(`${startRow},${startCol}`, { rowspan: endRow - startRow, colspan: endCol - startCol });
-            for (let r = startRow; r < endRow; r++) {
-                for (let c = startCol; c < endCol; c++) {
-                    if (r !== startRow || c !== startCol) {
-                        mergedCells.add(`${r},${c}`);
-                    }
-                }
-            }
-        }
-    }
-
-    const rgbColor = (color) => {
-        if (!color) return null;
-        const r = Math.round((color.red ?? 0) * 255);
-        const g = Math.round((color.green ?? 0) * 255);
-        const b = Math.round((color.blue ?? 0) * 255);
-        return `rgb(${r},${g},${b})`;
-    };
-
-    const escapeCell = (value) => {
-        const text = String(value || "");
-        return text
-            .replace(/&/g, "&amp;")
-            .replace(/</g, "&lt;")
-            .replace(/>/g, "&gt;")
-            .replace(/\r\n|\r|\n/g, " ")
-            .replace(/"/g, "&quot;")
-            .substring(0, 200);
-    };
-
-    const renderCellText = (cell) => {
-        if (!cell) return "";
-        return escapeCell(cell.formattedValue ?? cell.effectiveValue?.stringValue ?? cell.effectiveValue?.numberValue ?? "");
-    };
-
-    const renderCellStyle = (cell) => {
-        if (!cell) return "";
-        const format = cell.effectiveFormat || cell.userEnteredFormat || {};
-        const styles = [];
-        if (format.backgroundColor) {
-            const color = rgbColor(format.backgroundColor);
-            if (color) styles.push(`background:${color}`);
-        }
-        if (format.horizontalAlignment) {
-            styles.push(`text-align:${format.horizontalAlignment.toLowerCase()}`);
-        }
-        if (format.verticalAlignment) {
-            const valign = format.verticalAlignment === 'MIDDLE' ? 'middle' : format.verticalAlignment.toLowerCase();
-            styles.push(`vertical-align:${valign}`);
-        }
-        if (format.textFormat) {
-            if (format.textFormat.bold) styles.push('font-weight:700');
-            if (format.textFormat.italic) styles.push('font-style:italic');
-            if (format.textFormat.underline) styles.push('text-decoration:underline');
-            if (format.textFormat.strikethrough) styles.push('text-decoration:line-through');
-            if (format.textFormat.foregroundColor) {
-                const fg = rgbColor(format.textFormat.foregroundColor);
-                if (fg) styles.push(`color:${fg}`);
-            }
-        }
-        if (format.wrapStrategy === 'WRAP') {
-            styles.push('white-space:normal');
-        } else {
-            styles.push('white-space:nowrap');
-        }
-        return styles.join(';');
-    };
-
-    const columnMeta = gridData.columnMetadata || [];
-    const hasColumnWidths = columnMeta.some(col => col.pixelSize);
-    const colGroup = hasColumnWidths
-        ? `<colgroup>${columnMeta.slice(0, rangeColCount).map(col => `<col style="width:${Math.max(col.pixelSize || 80, 40)}px"></col>`).join('')}</colgroup>`
-        : '';
-
-    let tableHtml = `<!DOCTYPE html><html><head><meta charset="UTF-8"><style>body{font-family:Arial,sans-serif;margin:0;padding:12px;background:#fff;color:#111}h3{margin:0 0 12px;font-size:18px;font-weight:600}table{border-collapse:collapse;width:100%;min-width:100%;font-size:11px;table-layout:fixed}th,td{border:1px solid #ccc;padding:6px 8px;text-align:left;vertical-align:top;background:#fff;word-break:break-word}th{background:#f6f6f6;font-weight:700}td{min-width:50px;height:24px}tr:nth-child(even) td{background:#fcfcfc}</style></head><body><h3>${escapeCell(targetSheetTitle)}</h3><table>${colGroup}`;
-
-    for (let rowIndex = 0; rowIndex < rangeRowCount; rowIndex++) {
-        const row = normalizedRows[rowIndex] || [];
-        tableHtml += '<tr>';
-        for (let colIndex = 0; colIndex < rangeColCount; colIndex++) {
-            if (mergedCells.has(`${rowIndex},${colIndex}`)) continue;
-            const merge = mergeMap.get(`${rowIndex},${colIndex}`);
-            const cell = row[colIndex] || {};
-            const text = renderCellText(cell);
-            const style = renderCellStyle(cell);
-            const spanAttrs = [];
-            if (merge) {
-                if (merge.rowspan > 1) spanAttrs.push(`rowspan="${merge.rowspan}"`);
-                if (merge.colspan > 1) spanAttrs.push(`colspan="${merge.colspan}"`);
-            }
-            if (style) spanAttrs.push(`style="${style}"`);
-            tableHtml += `<td ${spanAttrs.join(' ')}>${text || '&nbsp;'}</td>`;
-        }
-        tableHtml += '</tr>';
-    }
-
-    tableHtml += `</table></body></html>`;
-    console.log(`HTML generated, length: ${tableHtml.length}`);
-
-    const formData = new URLSearchParams();
-    formData.append("source", tableHtml);
-    const h2iResponse = await fetch(`https://www.html2image.net/api/api.php?key=${env.HTML2IMAGE_API_KEY}&type=png&delay=1`, {
-        method: "POST",
-        headers: { "Content-Type": "application/x-www-form-urlencoded" },
-        body: formData.toString()
+    const res = await fetch(url, {
+        method: 'POST',
+        headers: {
+            'Authorization': `token ${token}`,
+            'Accept': 'application/vnd.github.v3+json',
+            'Content-Type': 'application/json',
+            'User-Agent': 'seatalk-bot'
+        },
+        body: JSON.stringify({ ref: 'main', inputs })
     });
 
-    const rawResponse = await h2iResponse.text();
-    console.log(`HTML2Image response: ${rawResponse.substring(0, 300)}`);
-    let h2iData;
-    try {
-        h2iData = JSON.parse(rawResponse);
-    } catch (err) {
-        throw new Error(`Gagal merender gambar: respon tidak valid dari HTML2Image (${h2iResponse.status})`);
+    if (res.status === 204) return true;
+    const txt = await res.text();
+    if (res.status === 404) {
+      throw new Error(`Gagal memicu workflow: HTTP 404 - Not Found. Pastikan GITHUB_TRIGGER_TOKEN memiliki akses ke repo dan Actions, serta workflow file '.github/workflows/screenshot.yml' benar-benar ada.`);
     }
-
-    if (!h2iData?.Status || h2iData.Status !== "OK" || !h2iData.Link) {
-        throw new Error(`Gagal merender gambar: ${h2iData?.Message || JSON.stringify(h2iData)}`);
-    }
-
-    const imageUrl = h2iData.Link;
-    console.log(`Fetching image from: ${imageUrl}`);
-    const imageRes = await fetch(imageUrl);
-    if (!imageRes.ok) {
-        throw new Error(`Gagal mengambil gambar dari HTML2Image: HTTP ${imageRes.status}`);
-    }
-
-    const buffer = await imageRes.arrayBuffer();
-    console.log(`Image buffer size: ${buffer.byteLength}`);
-    if (buffer.byteLength < 100) {
-        throw new Error("Gambar hasil rendering tidak valid atau kosong.");
-    }
-
-    const header = new Uint8Array(buffer.slice(0, 8));
-    const pngSignature = [0x89, 0x50, 0x4E, 0x47, 0x0D, 0x0A, 0x1A, 0x0A];
-    if (!pngSignature.every((byte, index) => header[index] === byte)) {
-        throw new Error("Gambar hasil rendering bukan PNG yang valid.");
-    }
-
-    return buffer;
+    throw new Error(`Gagal memicu workflow: HTTP ${res.status} - ${txt.substring(0,300)}`);
 }
 
 export async function handleSetSheet(env, targetId, text, isGroup, threadId, originalMessageId) {
@@ -403,8 +281,9 @@ export async function handleScreenshotCommand(env, targetId, text, isGroup, thre
     console.log(`Screenshot command: sheetId=${sheetId} tabName="${tabName}" customRange=${customRange}`);
     
     try {
-        const buffer = await generatePrivateSheetBuffer(env, sheetId, tabName, customRange);
-        await sendScreenshotToUser(env, buffer, targetId, isGroup, threadId);
+        const { sheetsUrl, targetSheetTitle } = await generatePrivateSheetBuffer(env, sheetId, tabName, customRange);
+        await triggerScreenshotWorkflow(env, sheetsUrl, targetId, isGroup, threadId, originalMessageId);
+        await replyToUser(env, `✅ Permintaan screenshot dikirim untuk sheet "${targetSheetTitle}". Workflow sedang berjalan dan hasil akan dikirim ke SeaTalk.`, targetId, isGroup, threadId, originalMessageId);
     } catch (err) {
         console.error(`Screenshot error: tabName="${tabName}" customRange="${customRange}" - ${err.message}`);
         await replyToUser(env, `❌ ${err.message}`, targetId, isGroup, threadId, originalMessageId);

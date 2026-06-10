@@ -30,5 +30,6 @@ crons = ["* * * * *"]
 [vars]
 GOOGLE_CLIENT_EMAIL = "vasa-725@studio-1196053014-a94d0.iam.gserviceaccount.com"
 SEATALK_APP_ID = "NzE2Mjg3ODUxMjc5"
-SEATALK_APP_SECRET = "c3urIS7asdvFi0rIwbhuAKBklGWY1yQv"
-HTML2IMAGE_API_KEY = "h2i_0ab724d996831ad00b478ead62e75914"
+SEATALK_APP_SECRET = "<SET_IN_ENV>"
+GITHUB_TRIGGER_TOKEN = "<SET_IN_ENV>"
+GITHUB_REPOSITORY = "bp-pratama/seatalk_bot"

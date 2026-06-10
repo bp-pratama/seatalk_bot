@@ -1,0 +1,59 @@
+name: Scheduled Screenshots
+
+on:
+  schedule:
+    - cron: '0 * * * *'
+  workflow_dispatch:
+    inputs:
+      target_url:
+        description: 'Target URL to capture (overrides secret TARGET_URL)'
+        required: false
+        default: ''
+      target_id:
+        description: 'Seatalk target ID (employee_code or group_id)'
+        required: false
+        default: ''
+      is_group:
+        description: '1 if target_id is group_id, otherwise 0'
+        required: false
+        default: '0'
+      thread_id:
+        description: 'Optional Seatalk thread_id for group replies'
+        required: false
+        default: ''
+      original_message_id:
+        description: 'Optional original message ID for thread replies'
+        required: false
+        default: ''
+
+permissions:
+  contents: write
+
+jobs:
+  capture:
+    runs-on: ubuntu-latest
+    env:
+      TARGET_URL: ${{ github.event.inputs.target_url || secrets.TARGET_URL }}
+      SEATALK_APP_ID: ${{ secrets.SEATALK_APP_ID }}
+      SEATALK_APP_SECRET: ${{ secrets.SEATALK_APP_SECRET }}
+      SEATALK_TARGET_ID: ${{ github.event.inputs.target_id || '' }}
+      SEATALK_IS_GROUP: ${{ github.event.inputs.is_group || '0' }}
+      SEATALK_THREAD_ID: ${{ github.event.inputs.thread_id || '' }}
+      SEATALK_ORIGINAL_MESSAGE_ID: ${{ github.event.inputs.original_message_id || '' }}
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+        with:
+          persist-credentials: true
+          fetch-depth: 0
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+
+      - name: Install dependencies
+        run: npm install
+
+      - name: Run screenshot script
+        run: node screenshot.js
