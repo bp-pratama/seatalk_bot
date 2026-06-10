@@ -194,7 +194,7 @@ async function run() {
       console.log('SPREADSHEET_ID found, rendering sheet via Service Account');
       const range = process.env.SPREADSHEET_RANGE || 'A1:Z100';
       const html = await fetchSheetHtmlFromServiceAccount(process.env.SPREADSHEET_ID, range);
-      await page.setContent(html, { waitUntil: 'networkidle0' });
+      await page.setContent(html, { waitUntil: 'load', timeout: 60000 });
     } else {
       console.log(`Navigating to ${targetUrl}`);
       await page.goto(targetUrl, { waitUntil: 'networkidle2', timeout: 60000 });
