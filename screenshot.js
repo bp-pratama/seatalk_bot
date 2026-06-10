@@ -51,28 +51,49 @@ async function sendScreenshotToSeatalk(appId, appSecret, targetId, isGroup, thre
   const base64Image = bufferToBase64(buffer);
 
   const endpoint = isGroup ? 'https://openapi.seatalk.io/messaging/v2/group_chat' : 'https://openapi.seatalk.io/messaging/v2/single_chat';
-  const requestBody = isGroup ? { group_id: targetId } : { employee_code: targetId };
-  requestBody.message = {
-    tag: 'image',
-    image: { base64: base64Image, type: 'image/png' },
-    text: { content: 'Screenshot dari Seatalk bot' }
-  };
-  if (isGroup && threadId) requestBody.thread_id = threadId;
-  else if (isGroup && originalMessageId) requestBody.thread_id = originalMessageId;
+  const requestBase = isGroup ? { group_id: targetId } : { employee_code: targetId };
+  const messageVariants = [
+    { tag: 'image', image_base64: { content: base64Image } },
+    { tag: 'image', image: { base64: base64Image } },
+    { tag: 'image', image: { base64: base64Image, type: 'image/png' } },
+    { tag: 'image', image: { content: base64Image } },
+    { tag: 'image', image: { content: base64Image, type: 'image/png' } },
+    { tag: 'image', image_base64: base64Image },
+    { tag: 'image', image: { data: base64Image } },
+    { tag: 'image', image: { data: base64Image, type: 'image/png' } },
+    { tag: 'image', image_base64: { data: base64Image } }
+  ];
 
-  const response = await fetch(endpoint, {
-    method: 'POST',
-    headers: {
-      'Content-Type': 'application/json',
-      'Authorization': `Bearer ${token}`
-    },
-    body: JSON.stringify(requestBody)
-  });
-  const responseData = await response.json();
-  if (responseData.code !== 0) {
-    throw new Error('SeaTalk image upload failed: ' + JSON.stringify(responseData));
+  let lastError = null;
+  for (const variant of messageVariants) {
+    const requestBody = { ...requestBase, message: variant };
+    if (isGroup && threadId) requestBody.thread_id = threadId;
+    else if (isGroup && originalMessageId) requestBody.thread_id = originalMessageId;
+
+    console.log('SeaTalk image request variant:', JSON.stringify(variant).substring(0, 200));
+    const response = await fetch(endpoint, {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        'Authorization': `Bearer ${token}`
+      },
+      body: JSON.stringify(requestBody)
+    });
+    const responseData = await response.json();
+
+    console.log('SeaTalk image response:', JSON.stringify(responseData).substring(0, 300));
+
+    if (responseData.code === 0) {
+      return responseData;
+    }
+
+    lastError = responseData;
+    if (responseData.code !== 4003 || typeof responseData.message !== 'string' || !responseData.message.includes('Message cannot be empty')) {
+      throw new Error('SeaTalk image upload failed: ' + JSON.stringify(responseData));
+    }
   }
-  return responseData;
+
+  throw new Error('SeaTalk image upload failed: ' + JSON.stringify(lastError));
 }
 
 async function run() {
