@@ -176,6 +176,7 @@ async function triggerScreenshotWorkflow(env, targetUrl, targetId, isGroup, thre
       original_message_id: originalMessageId || ''
     };
 
+    console.log(`Dispatching workflow to GitHub: ${url} with inputs: ${JSON.stringify(inputs)}`);
     const res = await fetch(url, {
         method: 'POST',
         headers: {
@@ -187,8 +188,13 @@ async function triggerScreenshotWorkflow(env, targetUrl, targetId, isGroup, thre
         body: JSON.stringify({ ref: 'main', inputs })
     });
 
-    if (res.status === 204) return true;
+    console.log(`Workflow dispatch response: ${res.status} ${res.statusText}`);
+    if (res.status === 204) {
+      console.log('Workflow dispatch accepted by GitHub.');
+      return true;
+    }
     const txt = await res.text();
+    console.log(`Workflow dispatch response body: ${txt.substring(0, 1000)}`);
     if (res.status === 404) {
       throw new Error(`Gagal memicu workflow: HTTP 404 - Not Found. Pastikan GITHUB_TRIGGER_TOKEN memiliki akses ke repo dan Actions, serta workflow file '.github/workflows/screenshot.yml' benar-benar ada.`);
     }
@@ -282,7 +288,9 @@ export async function handleScreenshotCommand(env, targetId, text, isGroup, thre
     
     try {
         const { sheetsUrl, targetSheetTitle } = await generatePrivateSheetBuffer(env, sheetId, tabName, customRange);
+        console.log(`Prepared screenshot request: sheetsUrl=${sheetsUrl} targetSheetTitle=${targetSheetTitle}`);
         await triggerScreenshotWorkflow(env, sheetsUrl, targetId, isGroup, threadId, originalMessageId);
+        console.log('Dispatch complete, reply to user confirms workflow is running.');
         await replyToUser(env, `✅ Permintaan screenshot dikirim untuk sheet "${targetSheetTitle}". Workflow sedang berjalan dan hasil akan dikirim ke SeaTalk.`, targetId, isGroup, threadId, originalMessageId);
     } catch (err) {
         console.error(`Screenshot error: tabName="${tabName}" customRange="${customRange}" - ${err.message}`);
