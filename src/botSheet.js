@@ -286,6 +286,7 @@ async function triggerScreenshotWorkflow(env, spreadsheetId, targetId, isGroup, 
     const payload = {
         ref: 'main',
         inputs: {
+            spreadsheet_id: spreadsheetId || '',
             target_id: targetId || '',
             is_group: isGroup ? '1' : '0',
             thread_id: threadId || '',

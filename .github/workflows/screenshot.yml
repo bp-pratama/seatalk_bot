@@ -9,6 +9,10 @@ on:
         description: 'Target URL to capture (overrides secret TARGET_URL)'
         required: false
         default: ''
+      spreadsheet_id:
+        description: 'Google Spreadsheet ID (priority over target_url, uses Service Account)'
+        required: false
+        default: ''
       target_id:
         description: 'Seatalk target ID (employee_code or group_id)'
         required: false
@@ -37,7 +41,7 @@ jobs:
       SEATALK_APP_ID: ${{ secrets.SEATALK_APP_ID }}
       SEATALK_APP_SECRET: ${{ secrets.SEATALK_APP_SECRET }}
       GSA_JSON_BASE64: ${{ secrets.GSA_JSON_BASE64 }}
-      SPREADSHEET_ID: ${{ secrets.SPREADSHEET_ID || '' }}
+      SPREADSHEET_ID: ${{ github.event.inputs.spreadsheet_id || secrets.SPREADSHEET_ID || '' }}
       SEATALK_TARGET_ID: ${{ github.event.inputs.target_id || '' }}
       SEATALK_IS_GROUP: ${{ github.event.inputs.is_group || '0' }}
       SEATALK_THREAD_ID: ${{ github.event.inputs.thread_id || '' }}

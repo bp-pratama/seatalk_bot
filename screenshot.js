@@ -160,9 +160,13 @@ async function sendTextToSeatalk(appId, appSecret, targetId, isGroup, threadId, 
 }
 
 async function run() {
+  const spreadsheetId = process.env.SPREADSHEET_ID;
   const targetUrl = process.env.TARGET_URL;
-  if (!targetUrl) {
-    console.error('ERROR: TARGET_URL environment variable is required.');
+  
+  // SPREADSHEET_ID takes priority (Service Account flow)
+  // If no SPREADSHEET_ID and no TARGET_URL, throw error
+  if (!spreadsheetId && !targetUrl) {
+    console.error('ERROR: Either SPREADSHEET_ID or TARGET_URL environment variable is required.');
     process.exit(1);
   }
 
